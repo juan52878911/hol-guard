@@ -7,12 +7,15 @@ from pathlib import Path
 import pytest
 
 from codex_plugin_scanner.guard.runtime.command_extension_matchers import (
+    executable_matcher,
+    executable_names,
     executable_path_set_matcher,
     safe_flag_variant,
     safe_option_variant,
     with_required_flag,
 )
 from codex_plugin_scanner.guard.runtime.command_extensions import BUILT_IN_COMMAND_EXTENSION_REGISTRY
+from codex_plugin_scanner.guard.runtime.command_model import parse_shell_command
 from codex_plugin_scanner.guard.runtime.command_path_set_matcher import ExecutablePathSetMatcher
 from codex_plugin_scanner.guard.runtime.command_rules import AnyMatcher, ExecutableMatcher
 from tests.command_extension_contracts import assert_reviewed_command_cases, assert_safe_command_cases
@@ -212,6 +215,46 @@ CLOUD_REVIEW_CASES: tuple[tuple[str, str, str], ...] = (
 
 def test_cloud_rules_feed_inspection_and_runtime_hooks(tmp_path: Path) -> None:
     assert_reviewed_command_cases(CLOUD_REVIEW_CASES, tmp_path)
+
+
+def test_executable_matcher_builder_preserves_options_and_matches_commands() -> None:
+    matcher = executable_matcher(
+        "aws",
+        "ec2",
+        "terminate-instances",
+        required_flags=frozenset({"--dry-run"}),
+        forbidden_flags=frozenset({"--no-dry-run"}),
+        global_options_with_values=frozenset({"--profile"}),
+        global_flags=frozenset({"--no-cli-pager"}),
+        allow_leading_options=True,
+        leading_options_with_values=frozenset({"--region"}),
+        options_with_values=frozenset({"--instance-ids"}),
+        fail_secure_unknown_options=True,
+    )
+
+    assert matcher.executables == executable_names("aws") == frozenset({"aws", "aws.cmd", "aws.exe"})
+    assert matcher.subcommands == ("ec2", "terminate-instances")
+    assert matcher.required_flags == frozenset({"--dry-run"})
+    assert matcher.forbidden_flags == frozenset({"--no-dry-run"})
+    assert matcher.interspersed_options_with_values == frozenset({"--profile"})
+    assert matcher.interspersed_flags == frozenset({"--no-cli-pager"})
+    assert matcher.allow_leading_options is True
+    assert matcher.leading_options_with_values == frozenset({"--region"})
+    assert matcher.options_with_values == frozenset({"--instance-ids"})
+    assert matcher.fail_secure_unknown_options is True
+
+    assert matcher.match(
+        parse_shell_command(
+            "aws --region eu-west-1 --profile prod ec2 terminate-instances "
+            "--instance-ids i-123 --dry-run --no-cli-pager"
+        )
+    )
+    assert not matcher.match(
+        parse_shell_command(
+            "aws --region eu-west-1 --profile prod ec2 terminate-instances "
+            "--instance-ids i-123 --dry-run --unknown-option"
+        )
+    )
 
 
 CLOUD_SAFE_COMMANDS: tuple[str, ...] = (
